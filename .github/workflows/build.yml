@@ -1,8 +1,10 @@
 name: Build FriendlyWrt
 
 on:
+  workflow_dispatch:
   watch:
     types: started
+
 jobs:
   prepare_release:
     runs-on: ubuntu-22.04
@@ -13,7 +15,6 @@ jobs:
       run: |
         release_tag="FriendlyWrt-$(date +%Y-%m-%d)"
         echo "release_tag=$release_tag" >> $GITHUB_OUTPUT
-
     - name: Create empty release
       id: release
       uses: softprops/action-gh-release@v1
@@ -31,10 +32,11 @@ jobs:
     needs: prepare_release
     runs-on: ubuntu-22.04
     if: github.event.repository.owner.id == github.event.sender.id
+
     strategy:
       matrix:
-        VERSION: ['25.12', '24.10']
-        SET: [docker, non-docker]
+        VERSION: ['25.12']
+        SET: [non-docker]
 
     steps:
     - name: Checkout
@@ -67,7 +69,6 @@ jobs:
         cd project
         repo init --depth=1 -u https://github.com/friendlyarm/friendlywrt_manifests -b master-v${{ matrix.VERSION }} \
                 -m rk3399.xml --repo-url=https://github.com/friendlyarm/repo  --no-clone-bundle
-
         repo sync -c friendlywrt --no-clone-bundle
         repo sync -c configs --no-clone-bundle
         repo sync -c device/common --no-clone-bundle
@@ -93,6 +94,13 @@ jobs:
         TARGET_FRIENDLYWRT_CONFIG=${CONFIG}
         EOL
         DEBUG_DOT_CONFIG=1 ./build.sh friendlywrt
+
+    - name: Verify custom packages selected
+      run: |
+        cd project/friendlywrt
+        for p in podkop luci-app-podkop sing-box dnsmasq-full amneziawg-tools luci-proto-amneziawg; do
+          grep -q "^CONFIG_PACKAGE_${p}=y" .config || { echo "::error::${p} not selected in .config"; exit 1; }
+        done
 
     - name: Download package
       run: |
@@ -125,7 +133,7 @@ jobs:
         [ "${{ matrix.SET }}" == "docker" ] && SUFFIX="-docker"
         rootfs_filename="rootfs-friendlywrt-${{ matrix.VERSION }}${SUFFIX}.tgz"
         tar czf ../artifact/${rootfs_filename} ${FRIENDLYWRT_SRC}/${FRIENDLYWRT_ROOTFS} \
-              ${FRIENDLYWRT_SRC}/${FRIENDLYWRT_PACKAGE_DIR}
+            ${FRIENDLYWRT_SRC}/${FRIENDLYWRT_PACKAGE_DIR}
         echo "rootfs_filename=$rootfs_filename" >> $GITHUB_OUTPUT
 
     - name: Create host package-manager bundle
@@ -142,12 +150,11 @@ jobs:
           exit 1
         fi
         echo "Detected host package manager: $PM_BIN"
-
         ldd_out=$(ldd "$PM_BIN" 2>&1 || true)
         echo "$ldd_out"
         if ! echo "$ldd_out" | grep -q "not a dynamic executable"; then
           bad_paths=$(echo "$ldd_out" | grep -oE '=> /[^ ]+' | sed 's|=> ||' \
-                       | grep -vE '^/(lib|lib64|usr/lib)/' || true)
+                      | grep -vE '^/(lib|lib64|usr/lib)/' || true)
           not_found=$(echo "$ldd_out" | grep -F "not found" || true)
           if [ -n "$bad_paths" ] || [ -n "$not_found" ]; then
             echo "ERROR: $PM_BIN has non-portable dynamic dependencies:"
@@ -156,7 +163,6 @@ jobs:
             exit 1
           fi
         fi
-
         host_pm_filename="host-pm-${{ matrix.VERSION }}.tgz"
         tar czf ../artifact/${host_pm_filename} "$PM_BIN"
         echo "host_pm_filename=$host_pm_filename" >> $GITHUB_OUTPUT
@@ -187,9 +193,9 @@ jobs:
 
     strategy:
       matrix:
-        VERSION: ['25.12', '24.10']
-        CPU: [rk3328, rk3528, rk3399, rk3566, rk3568, rk3576, rk3588]
-        SET: [docker, non-docker]
+        VERSION: ['25.12']
+        CPU: [rk3528]
+        SET: [non-docker]
     steps:
     - name: Checkout
       uses: actions/checkout@v4
@@ -221,7 +227,6 @@ jobs:
         cd project
         repo init --depth=1 -u https://github.com/friendlyarm/friendlywrt_manifests -b master-v${{ matrix.VERSION }} \
                 -m ${{ matrix.CPU }}.xml --repo-url=https://github.com/friendlyarm/repo  --no-clone-bundle
-
         repo sync -c kernel --no-clone-bundle
         repo sync -c u-boot --no-clone-bundle
         repo sync -c rkbin --no-clone-bundle
@@ -296,7 +301,6 @@ jobs:
         IMG_FILE=${MODEL}-FriendlyWrt-${{ matrix.VERSION }}${SUFFIX}.img
         TGZ_FILE=images-${MODEL}-FriendlyWrt-${{ matrix.VERSION }}${SUFFIX}.tgz
         DIST_DIR=friendlywrt$(echo ${{ matrix.VERSION }}|awk -F . '{print $1}')${SUFFIX}
-
         CONFIG=rockchip${SUFFIX}
         cat > .current_config.mk <<EOL
         . device/friendlyelec/${{ matrix.CPU }}/base.mk
@@ -304,7 +308,6 @@ jobs:
         TARGET_FRIENDLYWRT_CONFIG=${CONFIG}
         TARGET_SD_RAW_FILENAME=${IMG_FILE}
         EOL
-
         echo "img_filename=$IMG_FILE" >> $GITHUB_OUTPUT
         echo "archive_filename=$TGZ_FILE" >> $GITHUB_OUTPUT
         echo "dist_dir=$DIST_DIR" >> $GITHUB_OUTPUT
@@ -326,16 +329,15 @@ jobs:
         cd project
         ## If you need to modify the kernel configuration, please edit the script below
         # source ../scripts/custome_kernel_config.sh
-
         ./build.sh uboot
         ./build.sh kernel
 
-        ## If you want to compile a driver from source, here is an example
-        # case ${{ matrix.CPU }} in
-        # rk3568)
-        #     ../scripts/3rd/add_r8125.sh
-        #     ;;
-        # esac
+        # out-of-tree drivers built against the vendor kernel
+        case ${{ matrix.CPU }} in
+        rk3528)
+          bash ../scripts/3rd/add_amneziawg.sh
+          ;;
+        esac
 
     - name: Build sd image
       id: build_sd_image
@@ -347,9 +349,9 @@ jobs:
         # package images-xyz.tgz
         pushd scripts/sd-fuse/ > /dev/null
         if [ ! -d "${{ steps.config.outputs.dist_dir }}" ]; then
-            echo "ERROR: image directory ${{ steps.config.outputs.dist_dir }} not found under scripts/sd-fuse/"
-            ls -la
-            exit 1
+          echo "ERROR: image directory ${{ steps.config.outputs.dist_dir }} not found under scripts/sd-fuse/"
+          ls -la
+          exit 1
         fi
         archive_dir="${{ steps.config.outputs.dist_dir }}-${{ matrix.CPU }}"
         mv "${{ steps.config.outputs.dist_dir }}" "${archive_dir}"
@@ -397,4 +399,3 @@ jobs:
             echo "Deleting asset: $asset"
             gh release delete-asset "$RELEASE_TAG" "$asset" --yes --repo "$GITHUB_REPOSITORY"
           done
-
