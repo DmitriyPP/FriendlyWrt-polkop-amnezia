@@ -25,12 +25,22 @@ git clone --depth 1 -b "${AWG_OPENWRT_REF}" "${AWG_OPENWRT_REPO}" "${custom_pkg_
 rm -rf "${custom_pkg_dir}/amneziawg-openwrt/kmod-amneziawg"
 sed -i -e 's/[[:space:]]*+kmod-amneziawg//g' "${custom_pkg_dir}"/amneziawg-openwrt/*/Makefile
 
+# apk (OpenWrt 25.x) не принимает дефис внутри версии: "0.0.1-1" -> ошибка "package version is invalid".
+# Для luci-proto-amneziawg задаём версию явно, до include luci.mk
+luci_awg_mk="${custom_pkg_dir}/amneziawg-openwrt/luci-proto-amneziawg/Makefile"
+sed -i -E '/^PKG_VERSION[:?]?=/d' "${luci_awg_mk}"
+sed -i '1i PKG_VERSION:=0.0.1' "${luci_awg_mk}"
+
 # --- Podkop: собираем из исходников (25.12 = apk, готовые .ipk не подходят) ---
 git clone --depth 1 -b "${PODKOP_REF}" "${PODKOP_REPO}" /tmp/podkop-src || exit 1
 for p in podkop luci-app-podkop; do
 	[ -f "/tmp/podkop-src/${p}/Makefile" ] || { echo "::error::podkop: нет ${p}/Makefile — структура репозитория изменилась"; exit 1; }
 	cp -a "/tmp/podkop-src/${p}" "${custom_pkg_dir}/"
 done
+
+# Та же защита для всех остальных своих пакетов: обрезаем всё после дефиса в PKG_VERSION
+find "${custom_pkg_dir}" -name Makefile -exec \
+	sed -i -E 's/^(PKG_VERSION[:?]?=[^-[:space:]]*)-[^[:space:]]*/\1/' {} +
 
 # --- выбор пакетов ---
 sed -i -e '/^CONFIG_PACKAGE_dnsmasq=/d' -e '/CONFIG_PACKAGE_dnsmasq is not set/d' configs/rockchip/01-nanopi
