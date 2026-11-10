@@ -331,13 +331,14 @@ jobs:
         # source ../scripts/custome_kernel_config.sh
 
         # Свежий rtw88 (собирается скриптами FriendlyElec) использует FIELD_PREP_CONST,
-        # которого нет в вендорском ядре 6.1 — добавляем бэкпорт макроса
+        # которого нет в вендорском ядре 6.1. Часть файлов rtw88 сама объявляет
+        # "#define FIELD_PREP_CONST FIELD_PREP" — используем ровно такое же определение,
+        # тогда повторное объявление не считается ошибкой.
         if ! grep -q 'FIELD_PREP_CONST' kernel/include/linux/bitfield.h; then
         cat >> kernel/include/linux/bitfield.h <<'EOF'
 
         #ifndef FIELD_PREP_CONST
-        #define FIELD_PREP_CONST(_mask, _val) \
-        	(((typeof(_mask))(_val) << __bf_shf(_mask)) & (_mask))
+        #define FIELD_PREP_CONST FIELD_PREP
         #endif
         EOF
         fi
