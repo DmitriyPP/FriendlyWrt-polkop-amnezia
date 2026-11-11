@@ -40,9 +40,34 @@ aarch64-linux-gnu-gcc --version | head -n1
 # build module
 rm -rf awg-km
 git clone --depth 1 -b "${AWG_KM_REF}" "${AWG_KM_REPO}" awg-km
+
+# Совместимость нового кода AmneziaWG со старым ядром 6.1:
+# функции таймеров переименованы в 6.2+ (timer_delete*), в 6.16+ (timer_container_of).
+# Заголовок подключается в каждый файл модуля через -include и не трогает само ядро.
+compat_h="${top_path}/awg-km/awg_compat_old_kernel.h"
+cat > "${compat_h}" <<'EOF'
+#ifndef AWG_COMPAT_OLD_KERNEL_H
+#define AWG_COMPAT_OLD_KERNEL_H
+#include <linux/version.h>
+#include <linux/timer.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
+#ifndef timer_delete
+#define timer_delete(t) del_timer(t)
+#endif
+#ifndef timer_delete_sync
+#define timer_delete_sync(t) del_timer_sync(t)
+#endif
+#endif
+#ifndef timer_container_of
+#define timer_container_of(var, t, field) from_timer(var, t, field)
+#endif
+#endif
+EOF
+
 (cd awg-km/src && {
 	# для ядер 5.6+ модулю нужен полный исходник ядра по симлинку kernel
 	ln -sfn "${top_path}/kernel" kernel
+	export KCFLAGS="-include ${compat_h}"
 	make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 KERNELDIR="${top_path}/kernel" -j"$(nproc)"
 	cp -afv amneziawg.ko "${modules_dir}/"
 })
