@@ -2,13 +2,18 @@ name: Build FriendlyWrt
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse_release:
+        description: 'Тег релиза с готовым rootfs (например FriendlyWrt-2026-11-10). Пусто = полная сборка'
+        required: false
+        default: ''
   watch:
     types: started
 
 jobs:
   prepare_release:
     runs-on: ubuntu-22.04
-    if: github.event.repository.owner.id == github.event.sender.id
+    if: github.event.repository.owner.id == github.event.sender.id && !inputs.reuse_release
     steps:
     - name: Get release tag
       id: release_tag
@@ -31,7 +36,9 @@ jobs:
   build_friendlywrt:
     needs: prepare_release
     runs-on: ubuntu-22.04
-    if: github.event.repository.owner.id == github.event.sender.id
+    if: github.event.repository.owner.id == github.event.sender.id && !inputs.reuse_release
+    env:
+      RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
 
     strategy:
       matrix:
@@ -173,7 +180,7 @@ jobs:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: ./artifact/${{ steps.create_rootfs_package.outputs.rootfs_filename }}
         asset_name: ${{ steps.create_rootfs_package.outputs.rootfs_filename }}
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
+        tag: ${{ env.RELEASE_TAG }}
         overwrite: true
 
     - name: Upload host package-manager bundle
@@ -183,13 +190,19 @@ jobs:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: ./artifact/${{ steps.create_host_pm_package.outputs.host_pm_filename }}
         asset_name: ${{ steps.create_host_pm_package.outputs.host_pm_filename }}
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
+        tag: ${{ env.RELEASE_TAG }}
         overwrite: true
 
   build_img:
     needs: [prepare_release,build_friendlywrt]
     runs-on: ubuntu-22.04
-    if: github.event.repository.owner.id == github.event.sender.id
+    # запускается после успешного build_friendlywrt ИЛИ сразу, если указан готовый релиз
+    if: >-
+      always() &&
+      github.event.repository.owner.id == github.event.sender.id &&
+      (needs.build_friendlywrt.result == 'success' || inputs.reuse_release)
+    env:
+      RELEASE_TAG: ${{ inputs.reuse_release || needs.prepare_release.outputs.release_tag }}
 
     strategy:
       matrix:
@@ -244,7 +257,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         repository: ${{ github.repository }}
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
+        tag: ${{ env.RELEASE_TAG }}
         fileName: "rootfs-friendlywrt-${{ matrix.VERSION }}.tgz"
 
     - name: Download friendlywrt rootfs (docker)
@@ -254,7 +267,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         repository: ${{ github.repository }}
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
+        tag: ${{ env.RELEASE_TAG }}
         fileName: "rootfs-friendlywrt-${{ matrix.VERSION }}-docker.tgz"
 
     - name: Download host package-manager bundle
@@ -263,7 +276,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         repository: ${{ github.repository }}
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
+        tag: ${{ env.RELEASE_TAG }}
         fileName: "host-pm-${{ matrix.VERSION }}.tgz"
 
     - name: Prepare config
@@ -343,6 +356,41 @@ jobs:
         EOF
         fi
 
+        # Свежий rtw88 ждёт SDIO-идентификаторы Realtek, которых нет в sdio_ids.h ядра 6.1.
+        # Значения — как в upstream Linux.
+        if ! grep -q 'SDIO_VENDOR_ID_REALTEK\b' kernel/include/linux/mmc/sdio_ids.h; then
+        cat >> kernel/include/linux/mmc/sdio_ids.h <<'EOF'
+
+        #ifndef SDIO_VENDOR_ID_REALTEK
+        #define SDIO_VENDOR_ID_REALTEK 0x024c
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8723BS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8723BS 0xb723
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8723CS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8723CS 0xb703
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8723DS_2ANT
+        #define SDIO_DEVICE_ID_REALTEK_RTW8723DS_2ANT 0xd723
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8723DS_1ANT
+        #define SDIO_DEVICE_ID_REALTEK_RTW8723DS_1ANT 0xd724
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8821DS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8821DS 0xd821
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8821CS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8821CS 0xc821
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8822BS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8822BS 0xb822
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8822CS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8822CS 0xc822
+        #endif
+        EOF
+        fi
+
         ./build.sh uboot
         ./build.sh kernel
 
@@ -382,7 +430,7 @@ jobs:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: ./artifact/${{ steps.config.outputs.archive_filename }}
         asset_name: ${{ steps.config.outputs.archive_filename }}
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
+        tag: ${{ env.RELEASE_TAG }}
         overwrite: true
 
     - name: Upload XYZ.img.gz to release
@@ -391,18 +439,21 @@ jobs:
         repo_token: ${{ secrets.GITHUB_TOKEN }}
         file: ./artifact/${{ steps.config.outputs.img_filename }}.gz
         asset_name: ${{ steps.config.outputs.img_filename }}.gz
-        tag: ${{ needs.prepare_release.outputs.release_tag }}
+        tag: ${{ env.RELEASE_TAG }}
         overwrite: true
 
   cleanup_intermediate_assets:
     needs: [prepare_release, build_img]
     runs-on: ubuntu-22.04
-    if: github.event.repository.owner.id == github.event.sender.id
+    if: >-
+      always() &&
+      github.event.repository.owner.id == github.event.sender.id &&
+      needs.build_img.result == 'success'
     steps:
     - name: Delete intermediate assets from release
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        RELEASE_TAG: ${{ needs.prepare_release.outputs.release_tag }}
+        RELEASE_TAG: ${{ inputs.reuse_release || needs.prepare_release.outputs.release_tag }}
       run: |
         gh release view "$RELEASE_TAG" \
           --repo "$GITHUB_REPOSITORY" \
