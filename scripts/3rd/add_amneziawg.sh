@@ -41,33 +41,29 @@ aarch64-linux-gnu-gcc --version | head -n1
 rm -rf awg-km
 git clone --depth 1 -b "${AWG_KM_REF}" "${AWG_KM_REPO}" awg-km
 
-# Совместимость нового кода AmneziaWG со старым ядром 6.1:
-# функции таймеров переименованы в 6.2+ (timer_delete*), в 6.16+ (timer_container_of).
-# Заголовок подключается в каждый файл модуля через -include и не трогает само ядро.
-compat_h="${top_path}/awg-km/awg_compat_old_kernel.h"
-cat > "${compat_h}" <<'EOF'
-#ifndef AWG_COMPAT_OLD_KERNEL_H
-#define AWG_COMPAT_OLD_KERNEL_H
-#include <linux/version.h>
-#include <linux/timer.h>
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
+# Совместимость с вендорским ядром 6.1.141.
+# У модуля есть свой compat/compat.h, но по номеру версии он считает, что
+# timer_delete()/timer_delete_sync() уже есть (они бэкпортированы в upstream 6.1.y),
+# а в ядре FriendlyElec их нет. Дописываем недостающее в конец его же compat.h —
+# только если имена ещё не определены, поэтому конфликтов переопределения не будет.
+compat_h="awg-km/src/compat/compat.h"
+[ -f "${compat_h}" ] || { echo "::error::нет ${compat_h} — структура amneziawg-linux-kernel-module изменилась"; exit 1; }
+if ! grep -q 'AWG_FRIENDLYELEC_TIMER_COMPAT' "${compat_h}"; then
+cat >> "${compat_h}" <<'EOF'
+
+/* AWG_FRIENDLYELEC_TIMER_COMPAT: vendor 6.1 kernel lacks the 6.1.y timer renames */
 #ifndef timer_delete
-#define timer_delete(t) del_timer(t)
+#define timer_delete del_timer
 #endif
 #ifndef timer_delete_sync
-#define timer_delete_sync(t) del_timer_sync(t)
-#endif
-#endif
-#ifndef timer_container_of
-#define timer_container_of(var, t, field) from_timer(var, t, field)
-#endif
+#define timer_delete_sync del_timer_sync
 #endif
 EOF
+fi
 
 (cd awg-km/src && {
 	# для ядер 5.6+ модулю нужен полный исходник ядра по симлинку kernel
 	ln -sfn "${top_path}/kernel" kernel
-	export KCFLAGS="-include ${compat_h}"
 	make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 KERNELDIR="${top_path}/kernel" -j"$(nproc)"
 	cp -afv amneziawg.ko "${modules_dir}/"
 })
