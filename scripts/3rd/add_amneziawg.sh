@@ -26,11 +26,21 @@ for opt in CONFIG_NET_UDP_TUNNEL CONFIG_DST_CACHE CONFIG_CRYPTO_LIB_CURVE25519 C
 	}
 done
 
+# Тот же тулчейн, которым FriendlyElec собрал ядро (gcc 11.3, лежит в .../bin)
+TOOLCHAIN_BIN=/opt/FriendlyARM/toolchain/11.3-aarch64/bin
+if [ ! -x "${TOOLCHAIN_BIN}/aarch64-linux-gnu-gcc" ]; then
+	found=$(find /opt/FriendlyARM/toolchain -name aarch64-linux-gnu-gcc -type f 2>/dev/null | head -n1)
+	[ -n "${found}" ] || { echo "::error::aarch64-linux-gnu-gcc не найден в /opt/FriendlyARM/toolchain"; exit 1; }
+	TOOLCHAIN_BIN=$(dirname "${found}")
+fi
+export PATH="${TOOLCHAIN_BIN}:${PATH}"
+echo "Using compiler: $(command -v aarch64-linux-gnu-gcc)"
+aarch64-linux-gnu-gcc --version | head -n1
+
 # build module
 rm -rf awg-km
 git clone --depth 1 -b "${AWG_KM_REF}" "${AWG_KM_REPO}" awg-km
 (cd awg-km/src && {
-	export PATH=/opt/FriendlyARM/toolchain/11.3-aarch64:$PATH
 	# для ядер 5.6+ модулю нужен полный исходник ядра по симлинку kernel
 	ln -sfn "${top_path}/kernel" kernel
 	make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 KERNELDIR="${top_path}/kernel" -j"$(nproc)"
