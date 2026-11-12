@@ -16,7 +16,7 @@ AWG_OPENWRT_REPO=https://github.com/Slava-Shchipunov/awg-openwrt.git
 AWG_OPENWRT_COMMIT=03b62269e2edc168504f057cffaafda11b25ed92   # "feat: add awg v3.1 support"
 AWG_TOOLS_EXPECTED=3.1.20260812
 PODKOP_REPO=https://github.com/itdoginfo/podkop.git
-PODKOP_REF=main
+PODKOP_REF=0.7.24   # релиз (тег) itdoginfo/podkop; это же значение станет версией пакета
 
 custom_pkg_dir=friendlywrt/package/custom
 rm -rf "${custom_pkg_dir}" /tmp/podkop-src /tmp/awg-openwrt-src
@@ -46,6 +46,11 @@ for p in podkop luci-app-podkop; do
 	[ -f "/tmp/podkop-src/${p}/Makefile" ] || { echo "::error::podkop: нет ${p}/Makefile — структура репозитория изменилась"; exit 1; }
 	cp -a "/tmp/podkop-src/${p}" "${custom_pkg_dir}/"
 done
+# Без PODKOP_VERSION Makefile подставляет дату сборки (0.DDMMYYYY) — задаём версию релиза явно.
+# Она же попадает в constants.sh (podkop show_version) и в LuCI (main.js).
+sed -i -E "s/^PKG_VERSION[[:space:]]*:?=.*/PKG_VERSION:=${PODKOP_REF}/" \
+	"${custom_pkg_dir}/podkop/Makefile" "${custom_pkg_dir}/luci-app-podkop/Makefile"
+grep -q "^PKG_VERSION:=${PODKOP_REF}$" "${custom_pkg_dir}/podkop/Makefile" || { echo "::error::podkop: не удалось задать версию"; exit 1; }
 
 # apk (OpenWrt 25.x) не принимает дефис внутри версии: обрезаем всё после дефиса в PKG_VERSION
 find "${custom_pkg_dir}" -name Makefile -exec \
