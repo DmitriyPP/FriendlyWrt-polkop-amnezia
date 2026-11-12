@@ -7,7 +7,7 @@ set -eu
 top_path=$(pwd)
 
 AWG_KM_REPO=https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git
-AWG_KM_REF=master   # зафиксируйте коммит, совместимый с amneziawg-tools из custome_config.sh
+AWG_KM_REF=v3.1.20260906   # модуль AmneziaWG 3.1, пара к amneziawg-tools 3.1.20260812
 
 pushd kernel
 kernel_ver=`make CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 kernelrelease`
