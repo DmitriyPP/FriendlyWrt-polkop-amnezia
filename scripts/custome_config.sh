@@ -79,6 +79,21 @@ mkdir -p "$(dirname "${conf:-/etc/sing-box/config.json}")" /usr/share/sing-box
 [ -x /etc/init.d/podkop ] && /etc/init.d/podkop enable
 exit 0
 EOF
+
+# Wi-Fi: код страны. Без него ядро работает в домене 00, где 5-ГГц каналы помечены NO-IR:
+# точка доступа держится только пока подключён клиент-аплинк и гаснет при его обрыве.
+# Если /etc/config/wireless ещё не создан, скрипт возвращает 1 и выполнится при следующей загрузке.
+cat > friendlywrt/files/etc/uci-defaults/99-wifi-country <<'EOF'
+#!/bin/sh
+radios=$(uci -q show wireless | sed -n "s/^wireless\.\([^.=]*\)=wifi-device$/\1/p")
+[ -n "$radios" ] || exit 1
+for r in $radios; do
+	uci -q get wireless."$r".country >/dev/null || uci -q set wireless."$r".country='RU'
+done
+uci -q commit wireless
+exit 0
+EOF
+chmod 0755 friendlywrt/files/etc/uci-defaults/99-wifi-country
 chmod 0755 friendlywrt/files/etc/uci-defaults/99-podkop-singbox
 
 # --- выбор пакетов ---
