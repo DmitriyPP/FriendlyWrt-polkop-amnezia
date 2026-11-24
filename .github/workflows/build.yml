@@ -391,6 +391,9 @@ jobs:
         EOF
         fi
 
+        # драйвер Wi-Fi AIC8800 с увеличенным пулом буферов переупорядочивания
+        bash ../scripts/3rd/prepare_aic8800.sh
+
         ./build.sh uboot
         ./build.sh kernel
 

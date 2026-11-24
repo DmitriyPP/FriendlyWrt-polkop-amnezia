@@ -1,0 +1,145 @@
+name: Build AIC8800 driver (rk3528)
+
+# Быстрая сборка только ядра и драйвера Wi-Fi AIC8800 для NanoPi R28S (~30–40 мин),
+# без rootfs и образа. Результат — артефакт с aic8800_bsp.ko / aic8800_fdrv.ko
+# для замены модулей на работающем роутере (скрипт aic-swap.sh).
+
+on:
+  workflow_dispatch:
+    inputs:
+      reord_frames:
+        description: 'Размер пула буферов переупорядочивания MAX_REORD_RXFRAME (штатно 250)'
+        required: false
+        default: '2048'
+
+jobs:
+  build_aic8800:
+    runs-on: ubuntu-22.04
+    if: github.event.repository.owner.id == github.event.sender.id
+    env:
+      VERSION: '25.12'
+      CPU: rk3528
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d
+        wget https://raw.githubusercontent.com/friendlyarm/build-env-on-ubuntu-bionic/master/install.sh
+        sed -i -e 's/^apt-get -y install openjdk-8-jdk/# apt-get -y install openjdk-8-jdk/g' install.sh
+        sed -i -e 's/^\[ -d fa-toolchain \]/# [ -d fa-toolchain ]/g' install.sh
+        sed -i -e 's/^(cat fa-toolchain/# (cat fa-toolchain/g' install.sh
+        sed -i -e 's/^(tar xf fa-toolchain/# (tar xf fa-toolchain/g' install.sh
+        sudo -E bash ./install.sh
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'noreply@github.com'
+        git config --global color.ui false
+        git clone https://github.com/friendlyarm/repo
+        sudo -E cp repo/repo /usr/bin/
+        sudo swapoff -a || true
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android/sdk /usr/local/share/boost /opt/ghc 2>/dev/null || true
+
+    - name: Download source
+      run: |
+        mkdir project
+        cd project
+        repo init --depth=1 -u https://github.com/friendlyarm/friendlywrt_manifests -b master-v${VERSION} \
+                -m ${CPU}.xml --repo-url=https://github.com/friendlyarm/repo  --no-clone-bundle
+        repo sync -c kernel --no-clone-bundle
+        repo sync -c u-boot --no-clone-bundle
+        repo sync -c rkbin --no-clone-bundle
+        repo sync -c configs --no-clone-bundle
+        repo sync -c device/common --no-clone-bundle
+        repo sync -c device/friendlyelec --no-clone-bundle
+        repo sync -c scripts --no-clone-bundle
+        repo sync -c scripts/sd-fuse  --no-clone-bundle
+        repo sync -c toolchain  --no-clone-bundle
+
+    - name: Prepare config
+      run: |
+        cd project
+        cat > .current_config.mk <<EOL
+        . device/friendlyelec/${CPU}/base.mk
+        TARGET_IMAGE_DIRNAME=friendlywrt25
+        TARGET_FRIENDLYWRT_CONFIG=rockchip
+        EOL
+
+    - name: Compile kernel with patched AIC8800
+      env:
+        AIC_REORD_FRAMES: ${{ inputs.reord_frames }}
+      run: |
+        cd project
+
+        # Те же правки совместимости ядра, что и в основной сборке (нужны для rtw88)
+        if ! grep -q 'FIELD_PREP_CONST' kernel/include/linux/bitfield.h; then
+        cat >> kernel/include/linux/bitfield.h <<'EOF'
+
+        #ifndef FIELD_PREP_CONST
+        #define FIELD_PREP_CONST FIELD_PREP
+        #endif
+        EOF
+        fi
+        if ! grep -q 'SDIO_VENDOR_ID_REALTEK\b' kernel/include/linux/mmc/sdio_ids.h; then
+        cat >> kernel/include/linux/mmc/sdio_ids.h <<'EOF'
+
+        #ifndef SDIO_VENDOR_ID_REALTEK
+        #define SDIO_VENDOR_ID_REALTEK 0x024c
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8723BS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8723BS 0xb723
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8723CS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8723CS 0xb703
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8723DS_2ANT
+        #define SDIO_DEVICE_ID_REALTEK_RTW8723DS_2ANT 0xd723
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8723DS_1ANT
+        #define SDIO_DEVICE_ID_REALTEK_RTW8723DS_1ANT 0xd724
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8821DS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8821DS 0xd821
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8821CS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8821CS 0xc821
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8822BS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8822BS 0xb822
+        #endif
+        #ifndef SDIO_DEVICE_ID_REALTEK_RTW8822CS
+        #define SDIO_DEVICE_ID_REALTEK_RTW8822CS 0xc822
+        #endif
+        EOF
+        fi
+
+        bash ../scripts/3rd/prepare_aic8800.sh
+        ./build.sh kernel
+
+    - name: Collect modules
+      run: |
+        cd project
+        kver=$(make -s -C kernel CROSS_COMPILE=aarch64-linux-gnu- ARCH=arm64 kernelrelease)
+        src=$(readlink -f scripts/sd-fuse/out/output_${CPU}_kmodules/lib/modules/${kver})
+        mkdir -p ../artifact
+        for m in aic8800_bsp aic8800_fdrv; do
+          f=$(find "$src" -name "$m.ko" | head -n1)
+          [ -n "$f" ] || { echo "::error::$m.ko не найден в $src"; exit 1; }
+          cp -v "$f" ../artifact/
+        done
+        cd ../artifact
+        {
+          echo "kernel: $kver"
+          for m in *.ko; do
+            echo "== $m"; /sbin/modinfo "$m" | grep -E '^(version|vermagic|srcversion):'
+          done
+          echo; sha256sum *.ko
+        } | tee INFO.txt
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: aic8800-reord${{ inputs.reord_frames }}
+        path: artifact/
